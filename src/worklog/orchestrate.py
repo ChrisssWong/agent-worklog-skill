@@ -77,26 +77,37 @@ def _run_due_inner(root: Path, as_of: datetime, dry_run: bool) -> dict:
     for folder in ("raw", "coverage", "policy", "overrides"):
         for path in (root / folder).rglob("*.json") if folder != "policy" else (root / folder).rglob("*.yaml"):
             relative = str(path.relative_to(root))
-            item = {"hash": hashlib.sha256(path.read_bytes()).hexdigest(), "days": []}
+            item = {"hash": hashlib.sha256(path.read_bytes()).hexdigest(), "days": [], "task_state": False}
             if folder == "raw":
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 days = {raw["work_date"]}
                 for seg in raw["time"]["segments"]:
                     days.add(timestamp(seg["start"]).astimezone(zone).date().isoformat())
+                if raw["task_state_event"] is not None:
+                    days.add(timestamp(raw["task_state_event"]["occurred_at"]).astimezone(zone).date().isoformat())
+                    item["task_state"] = True
                 item["days"] = sorted(days)
             elif folder == "coverage":
                 item["days"] = [json.loads(path.read_text(encoding="utf-8"))["work_date"]]
             inputs[relative] = item
+    skill_root = Path(__file__).resolve().parents[2]
+    for path in sorted((skill_root / "src/worklog").glob("*.py")) + sorted((skill_root / "templates").glob("*.html")):
+        inputs[f"skill/{path.relative_to(skill_root)}"] = {"hash": hashlib.sha256(path.read_bytes()).hexdigest(), "days": []}
     changed_paths = {path for path in set(inputs) | set(prior["inputs"]) if inputs.get(path) != prior["inputs"].get(path)}
-    policy_changed = any(path.startswith(("policy/", "overrides/")) for path in changed_paths)
+    policy_changed = any(path.startswith(("policy/", "overrides/", "skill/")) for path in changed_paths)
     changed_days = set()
+    state_changed_days = set()
     for path in changed_paths:
         for state in (inputs, prior["inputs"]):
             changed_days.update(state.get(path, {}).get("days", []))
+            if state.get(path, {}).get("task_state"):
+                state_changed_days.update(state[path].get("days", []))
     def affected(kind: str, key: str) -> bool:
         from .reports import period
         start, end, _ = period(kind, key, policy["timezone"])
-        return any(start <= date.fromisoformat(day) < end for day in changed_days)
+        if any(start <= date.fromisoformat(day) < end for day in changed_days):
+            return True
+        return any(date.fromisoformat(day) < end for day in state_changed_days)
     selected = []
     for kind, key in planned:
         label = f"{kind}:{key}"

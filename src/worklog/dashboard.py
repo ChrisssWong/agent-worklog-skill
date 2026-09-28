@@ -15,6 +15,8 @@ from .reports import TEMPLATE_ROOT, write_if_changed
 def build_dashboard(root: Path, as_of: datetime, dry_run: bool = False) -> dict:
     policy = load_policy(root)
     events, conflicts = effective(all_revisions(root))
+    from .overrides import apply_overrides
+    events = apply_overrides(root, events)
     groups = {"year": defaultdict(list), "project": defaultdict(list), "technology": defaultdict(list), "agent": defaultdict(list)}
     for event in events:
         groups["year"][event["work_date"][:4]].append(event)
@@ -37,11 +39,15 @@ def build_dashboard(root: Path, as_of: datetime, dry_run: bool = False) -> dict:
         technologies = sorted({t for e in records for t in e["technologies"]})
         technology_links = [(t, hashlib.sha256(t.encode("utf-8")).hexdigest()[:16]) for t in technologies]
         years = sorted({e["work_date"][:4] for e in records})
+        growth_rows = []
+        for technology in technologies:
+            related = [e for e in records if technology in e["technologies"]]
+            growth_rows.append({"technology": technology, "first": min(e["work_date"] for e in related), "last": max(e["work_date"] for e in related), "active_days": len({e["work_date"] for e in related}), "events": len(related), "projects": len({e["project_id"] for e in related})})
         projects = sorted({e["project_id"] for e in records})
         agents = sorted({e["agent_id"] for e in records})
         date_range = (records[0]["work_date"], records[-1]["work_date"]) if records else (None, None)
         data_cutoff = max((e["recorded_at"] for e in records), default="无数据")
-        html = template.render(title=title, records=records, active_days=active_days, technologies=technologies, technology_links=technology_links, years=years, projects=projects, agents=agents, date_range=date_range, conflicts=conflicts, as_of=data_cutoff, root_prefix="../" * (len(relative.parts) - 2)).encode("utf-8")
+        html = template.render(title=title, records=records, active_days=active_days, technologies=technologies, technology_links=technology_links, years=years, projects=projects, agents=agents, date_range=date_range, conflicts=conflicts, as_of=data_cutoff, root_prefix="../" * (len(relative.parts) - 2), growth_rows=growth_rows, is_growth=relative == Path("site/growth/index.html")).encode("utf-8")
         if not dry_run:
             changed += write_if_changed(root / relative, html)
     return {"pages": [str(p) for p, _, _ in pages], "changed": changed, "dry_run": dry_run}

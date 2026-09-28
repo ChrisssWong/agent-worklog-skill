@@ -1,6 +1,7 @@
 import copy
 import json
 import subprocess
+from html.parser import HTMLParser
 import tempfile
 import unittest
 import uuid
@@ -25,7 +26,7 @@ schedule: {provisional_time: '23:00', close_time: '00:15'}
 
 
 def event(agent="codex", day="2026-09-28", task="t1", topic="s1", status="completed", dtype="estimated", seconds=1800, source="one"):
-    return {"schema_version": "1.0", "entry_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4()), "parent_revision_ids": [], "revision_kind": "create", "agent_id": agent, "producer_instance_id": "test", "source_namespace": agent, "idempotency_key": f"test-{source}-{agent}", "partition_date": day, "work_date": day, "recorded_at": f"{day}T12:00:00+08:00", "source_refs": [f"test:{source}"], "model": None, "project_id": "p1", "task_id": task, "topic_id": topic, "category": "implementation", "subcategories": [], "technologies": ["python"], "tags": [], "title": "合成工作", "summary": "仅供测试", "actions": [], "status": status, "task_state_event": None, "outputs": [], "time": {"activity_window": None, "duration_seconds": seconds, "duration_type": dtype, "evidence_ref": "test:timer" if dtype == "exact" else "test:estimate" if dtype == "estimated" else None, "allocation_method": "work_date", "segments": []}, "milestone": False, "importance": "normal"}
+    return {"schema_version": "1.0", "entry_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4()), "parent_revision_ids": [], "revision_kind": "create", "agent_id": agent, "producer_instance_id": "test", "source_namespace": agent, "idempotency_key": f"test-{source}-{agent}", "partition_date": day, "work_date": day, "timezone": "Asia/Shanghai", "recorded_at": f"{day}T12:00:00+08:00", "source_refs": [{"namespace": agent, "source_id": source, "ref": f"test:{source}"}], "model": None, "project_id": "p1", "task_id": task, "topic_id": topic, "category": "implementation", "subcategories": [], "technologies": ["python"], "tags": [], "title": "合成工作", "summary": "仅供测试", "actions": [], "status": status, "task_state_event": None, "outputs": [], "time": {"activity_window": None, "duration_seconds": seconds, "duration_type": dtype, "evidence_ref": "test:timer" if dtype == "exact" else "test:estimate" if dtype == "estimated" else None, "allocation_method": "work_date", "segments": []}, "milestone": False, "importance": "normal"}
 
 
 class WorklogTests(unittest.TestCase):
@@ -102,7 +103,7 @@ class WorklogTests(unittest.TestCase):
         self.assertNotIn("abc123456789", json.dumps(all_revisions(self.root)))
 
     def test_offline_git_sync_only_stages_worklog_paths(self):
-        subprocess.run(["git", "init", "-b", "main", str(self.root)], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["git", "-c", "init.templateDir=/dev/null", "init", "-b", "main", str(self.root)], check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["git", "-C", str(self.root), "config", "user.name", "Test"], check=True)
         subprocess.run(["git", "-C", str(self.root), "config", "user.email", "test@example.invalid"], check=True)
         subprocess.run(["git", "-C", str(self.root), "add", "policy/worklog.yaml"], check=True)
@@ -114,6 +115,30 @@ class WorklogTests(unittest.TestCase):
         with self.assertRaises(WorklogError) as ctx:
             sync(self.root)
         self.assertEqual(ctx.exception.code, "UNRELATED_GIT_CHANGE")
+
+    def test_remote_input_race_stops_stale_sync(self):
+        subprocess.run(["git", "-c", "init.templateDir=/dev/null", "init", "-b", "main", str(self.root)], check=True, stdout=subprocess.DEVNULL)
+        for key, value in (("user.name", "Test"), ("user.email", "test@example.invalid")):
+            subprocess.run(["git", "-C", str(self.root), "config", key, value], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "policy/worklog.yaml"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-m", "initial"], check=True, stdout=subprocess.DEVNULL)
+        remote = Path(self.temp.name).parent / f"worklog-remote-{uuid.uuid4()}"
+        other = Path(self.temp.name).parent / f"worklog-other-{uuid.uuid4()}"
+        try:
+            subprocess.run(["git", "-c", "init.templateDir=/dev/null", "init", "--bare", "-b", "main", str(remote)], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "-C", str(self.root), "remote", "add", "origin", str(remote)], check=True)
+            subprocess.run(["git", "-C", str(self.root), "push", "origin", "main"], check=True, stdout=subprocess.DEVNULL)
+            subprocess.run(["git", "-c", "init.templateDir=/dev/null", "clone", str(remote), str(other)], check=True, stdout=subprocess.DEVNULL)
+            for key, value in (("user.name", "Test"), ("user.email", "test@example.invalid")):
+                subprocess.run(["git", "-C", str(other), "config", key, value], check=True)
+            capture(self.root, event(source="clone-a"))
+            capture(other, event(source="clone-b"))
+            self.assertEqual(sync(self.root)["sync"], "pushed")
+            self.assertEqual(sync(other)["reason"], "REMOTE_INPUT_CHANGED_REBUILD_REQUIRED")
+        finally:
+            import shutil
+            shutil.rmtree(remote, ignore_errors=True)
+            shutil.rmtree(other, ignore_errors=True)
 
     def test_run_due_publishes_complete_snapshot_and_escapes_html(self):
         item = event(source="html")
@@ -131,6 +156,18 @@ class WorklogTests(unittest.TestCase):
         again = run_due(self.root, when)
         self.assertEqual(again["changed"], 0)
         self.assertEqual(again["published"]["version"], result["published"]["version"])
+        class Links(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.hrefs = []
+            def handle_starttag(self, tag, attrs):
+                if tag == "a":
+                    self.hrefs.extend(value for key, value in attrs if key == "href")
+        for page in (self.root / "site/current").rglob("*.html"):
+            parser = Links()
+            parser.feed(page.read_text(encoding="utf-8"))
+            for href in parser.hrefs:
+                self.assertTrue((page.parent / href).resolve().exists(), f"broken link: {page}: {href}")
 
     def test_iso_year_and_measured_day_buckets(self):
         item = event(day="2027-01-01", source="newyear", dtype="exact", seconds=1200)
@@ -146,6 +183,58 @@ class WorklogTests(unittest.TestCase):
         self.assertEqual(week["metrics"]["exact_seconds"], 1200)
         self.assertEqual(year["metrics"]["work_events"], 1)
         self.assertEqual(year["metrics"]["exact_seconds"], 1200)
+
+    def test_g03_amend_invalidates_closure_and_periods(self):
+        original = event(day="2026-09-30", source="g03", seconds=2400)
+        capture(self.root, original)
+        close_day(self.root, "codex", "2026-09-30", "test-scope")
+        later = event(day="2026-10-01", source="g03-oct", seconds=3000)
+        capture(self.root, later)
+        now = datetime.fromisoformat("2026-10-08T01:00:00+08:00")
+        self.assertEqual(report(self.root, "weekly", "2026-W40", now)["metrics"]["estimated_seconds"], 5400)
+        amended = copy.deepcopy(original)
+        amended.update(revision_id=str(uuid.uuid4()), parent_revision_ids=[original["revision_id"]], revision_kind="amend", revision_reason="核对计时依据")
+        amended["time"]["duration_seconds"] = 4200
+        capture(self.root, amended)
+        self.assertEqual(report(self.root, "weekly", "2026-W40", now)["metrics"]["estimated_seconds"], 7200)
+        self.assertEqual(report(self.root, "monthly", "2026-09", now)["metrics"]["estimated_seconds"], 4200)
+        self.assertEqual(report(self.root, "monthly", "2026-10", now)["metrics"]["estimated_seconds"], 3000)
+        day = report(self.root, "daily", "2026-09-30", now)
+        self.assertIn("codex", day["coverage"]["missing"])
+        close_day(self.root, "codex", "2026-09-30", "test-scope")
+        self.assertNotIn("codex", report(self.root, "daily", "2026-09-30", now)["coverage"]["missing"])
+
+    def test_task_carry_over_rebuilds_future_periods(self):
+        first = event(day="2026-09-28", source="state", status="completed")
+        first["task_state_event"] = {"state": "completed", "occurred_at": "2026-09-28T12:00:00+08:00", "source_ref": "test:state"}
+        capture(self.root, first)
+        now = datetime.fromisoformat("2026-10-03T01:00:00+08:00")
+        run_due(self.root, now)
+        before = report(self.root, "daily", "2026-10-02", now)
+        self.assertEqual(before["facts"]["task_snapshot"]["t1"]["state"], "completed")
+        amended = copy.deepcopy(first)
+        amended.update(revision_id=str(uuid.uuid4()), parent_revision_ids=[first["revision_id"]], revision_kind="amend", revision_reason="任务重新打开")
+        amended["task_state_event"]["state"] = "in_progress"
+        capture(self.root, amended)
+        planned = run_due(self.root, now, dry_run=True)["due"]
+        self.assertIn("daily:2026-10-02", planned)
+        self.assertIn("monthly:2026-09", planned)
+        run_due(self.root, now)
+        after = report(self.root, "daily", "2026-10-02", now)
+        self.assertEqual(after["facts"]["task_snapshot"]["t1"]["state"], "in_progress")
+        self.assertEqual(after["metrics"]["unfinished_identified_tasks"], 1)
+
+    def test_topic_override_groups_without_dropping_events(self):
+        one = event(agent="chatgpt", source="topic-one", topic="initial")
+        two = event(agent="codex", source="topic-two", topic="approved")
+        capture(self.root, one)
+        capture(self.root, two)
+        (self.root / "overrides").mkdir()
+        override = {"schema_version": "1.0", "override_id": str(uuid.uuid4()), "kind": "topic_alias", "targets": ["initial"], "value": "approved", "reason": "人工确认同主题", "source_ref": "test:review", "recorded_at": "2026-09-28T13:00:00+08:00"}
+        (self.root / "overrides" / f"{override['override_id']}.json").write_text(json.dumps(override), encoding="utf-8")
+        r = report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
+        self.assertEqual(r["metrics"]["work_events"], 2)
+        self.assertEqual(r["metrics"]["topics"], 1)
 
 
 if __name__ == "__main__":

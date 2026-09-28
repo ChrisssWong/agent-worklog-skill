@@ -62,6 +62,7 @@ def validate_event(event: dict, timezone: str) -> None:
     validate_shape(event, "event")
     try:
         ZoneInfo(timezone)
+        ZoneInfo(event["timezone"])
         date.fromisoformat(event["work_date"])
         date.fromisoformat(event["partition_date"])
     except (ValueError, KeyError) as exc:

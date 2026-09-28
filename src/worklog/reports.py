@@ -64,7 +64,7 @@ def report_path(kind: str, key: str, agent_id: str | None = None) -> Path:
 
 
 def empty_facts() -> dict:
-    return {"events": {}, "buckets": {}, "task_states": {}}
+    return {"events": {}, "buckets": {}, "task_states": {}, "task_snapshot": {}}
 
 
 def event_fact(event: dict) -> dict:
@@ -79,9 +79,9 @@ def daily_facts(events: list[dict], work_date: str, zone: str, agent_id: str | N
             continue
         if event["work_date"] == work_date:
             facts["events"][event["entry_id"]] = event_fact(event)
-            state = event["task_state_event"]
-            if state is not None:
-                facts["task_states"][event["entry_id"]] = {"task_id": event["task_id"], **state}
+        state = event["task_state_event"]
+        if state is not None and timestamp(state["occurred_at"]).astimezone(z).date().isoformat() == work_date:
+            facts["task_states"][event["entry_id"]] = {"task_id": event["task_id"], "revision_id": event["revision_id"], **state}
         t = event["time"]
         if t["duration_seconds"] is None:
             continue
@@ -99,7 +99,7 @@ def daily_facts(events: list[dict], work_date: str, zone: str, agent_id: str | N
 def merge_facts(children: list[dict]) -> dict:
     merged = empty_facts()
     for child in children:
-        for group in merged:
+        for group in ("events", "buckets", "task_states"):
             for key, value in child["facts"][group].items():
                 if key in merged[group] and merged[group][key] != value:
                     raise WorklogError("FACT_ID_CONFLICT", 6)
@@ -122,7 +122,22 @@ def metrics(facts: dict) -> dict:
         for tech in b["technologies"]:
             technology_seconds[tech] += b["seconds"]
     count = len(events)
-    return {"work_events": count, "completed_events": sum(e["status"] == "completed" for e in events), "identified_completed_tasks": len(completed), "identified_tasks": len(task_ids), "task_identity_coverage": (len([e for e in events if e["task_id"]]) / count if count else None), "active_projects": len({e["project_id"] for e in events}), "active_agents": len({e["agent_id"] for e in events}), "topics": len({e["topic_id"] or f"unassigned:{e['entry_id']}" for e in events}), "exact_seconds": exact, "estimated_seconds": estimated, "unknown_duration_events": sum(e["time"]["duration_type"] == "unknown" for e in events), "time_record_coverage": (len(known) / count if count else None), "project_seconds": dict(sorted(project_seconds.items())), "technology_seconds_overlapping": dict(sorted(technology_seconds.items()))}
+    return {"work_events": count, "completed_events": sum(e["status"] == "completed" for e in events), "identified_completed_tasks": len(completed), "identified_tasks": len(task_ids), "task_identity_coverage": (len([e for e in events if e["task_id"]]) / count if count else None), "active_projects": len({e["project_id"] for e in events}), "active_agents": len({e["agent_id"] for e in events}), "topics": len({e["topic_id"] or f"unassigned:{e['entry_id']}" for e in events}), "exact_seconds": exact, "estimated_seconds": estimated, "unknown_duration_events": sum(e["time"]["duration_type"] == "unknown" for e in events), "time_record_coverage": (len(known) / count if count else None), "project_seconds": dict(sorted(project_seconds.items())), "technology_seconds_overlapping": dict(sorted(technology_seconds.items())), "unfinished_identified_tasks": sum(x["state"] in ("planned", "in_progress", "blocked") for x in facts["task_snapshot"].values()), "unresolved_task_states": sum(x["state"] == "unresolved" for x in facts["task_snapshot"].values())}
+
+
+def task_snapshot(events: list[dict], cutoff: datetime) -> dict:
+    by_task = defaultdict(list)
+    for event in events:
+        state = event["task_state_event"]
+        if event["task_id"] and state is not None and timestamp(state["occurred_at"]) < cutoff:
+            by_task[event["task_id"]].append((timestamp(state["occurred_at"]), state["state"], event["entry_id"], event["revision_id"]))
+    result = {}
+    for task_id, declarations in by_task.items():
+        latest = max(item[0] for item in declarations)
+        heads = [item for item in declarations if item[0] == latest]
+        states = {item[1] for item in heads}
+        result[task_id] = {"state": next(iter(states)) if len(states) == 1 else "unresolved", "occurred_at": latest.isoformat(), "source_entry_ids": sorted({item[2] for item in heads}), "source_revision_ids": sorted({item[3] for item in heads})}
+    return dict(sorted(result.items()))
 
 
 def source_sections(facts: dict) -> tuple[dict, dict]:
@@ -141,7 +156,9 @@ def source_sections(facts: dict) -> tuple[dict, dict]:
             sections["learning"].append(row)
         if event["category"] == "design" and event["outputs"]:
             sections["decisions"].append(row)
-        provenance[event["entry_id"]] = {"revision_id": event["revision_id"], "source_refs": event["source_refs"]}
+        provenance[event["entry_id"]] = {"revision_id": event["revision_id"], "source_refs": [r["ref"] or f"{r['namespace']}:{r['source_id']}" for r in event["source_refs"]]}
+    for entry_id, state in facts["task_states"].items():
+        provenance.setdefault(entry_id, {"revision_id": state["revision_id"], "source_refs": [state["source_ref"]]})
     for value in sections.values():
         value.sort(key=lambda r: (r["work_date"], r["entry_id"]))
     return sections, dict(sorted(provenance.items()))
@@ -171,6 +188,8 @@ def report(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | Non
     if _context is None:
         policy = load_policy(root)
         event_list, conflicts = effective(all_revisions(root))
+        from .overrides import apply_overrides
+        event_list = apply_overrides(root, event_list)
         _context = {"policy": policy, "events": event_list, "conflicts": conflicts, "memo": {}}
     cache_key = (kind, key, agent_id)
     if cache_key in _context["memo"]:
@@ -209,6 +228,8 @@ def report(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | Non
                 children.append(report(root, "quarterly", f"{start.year}-Q{quarter}", as_of, _context=_context))
         facts = merge_facts(children)
         coverage = {"expected": [c["report_key"] for c in children], "received": [c["report_key"] for c in children if c["completeness"] == "complete"], "missing": [c["report_key"] for c in children if c["completeness"] != "complete"], "conflicts": sorted(set().union(*(c["coverage"]["conflicts"] for c in children)))}
+    cutoff = min(datetime.combine(end, time.min, ZoneInfo(zone)), local_as_of)
+    facts["task_snapshot"] = task_snapshot(event_list, cutoff)
     sections, provenance = source_sections(facts)
     close_time = policy["schedule"]["close_time"]
     hour, minute = map(int, close_time.split(":"))
@@ -269,6 +290,8 @@ def build(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | None
         day += timedelta(days=1)
     policy_path = root / "policy/worklog.yaml"
     inputs[str(policy_path.relative_to(root))] = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+    for override_path in sorted((root / "overrides").glob("*.json")):
+        inputs[str(override_path.relative_to(root))] = hashlib.sha256(override_path.read_bytes()).hexdigest()
     if kind == "daily":
         dependencies = [f"agent_daily:{key}:{a['agent_id']}" for a in active_agents(load_policy(root), start)]
     elif kind in ("weekly", "monthly"):
