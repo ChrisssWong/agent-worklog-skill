@@ -59,14 +59,14 @@ def due_keys(root: Path, as_of: datetime) -> list[tuple[str, str]]:
     return planned
 
 
-def run_due(root: Path, as_of: datetime, dry_run: bool = False) -> dict:
+def run_due(root: Path, as_of: datetime, dry_run: bool = False, force: bool = False) -> dict:
     if dry_run:
-        return _run_due_inner(root, as_of, True)
+        return _run_due_inner(root, as_of, True, force)
     with aggregator_lock(root):
-        return _run_due_inner(root, as_of, False)
+        return _run_due_inner(root, as_of, False, force)
 
 
-def _run_due_inner(root: Path, as_of: datetime, dry_run: bool) -> dict:
+def _run_due_inner(root: Path, as_of: datetime, dry_run: bool, force: bool) -> dict:
     planned = due_keys(root, as_of)
     runtime = root / ".worklog-runtime"
     state_path = runtime / "build-state.json"
@@ -112,7 +112,7 @@ def _run_due_inner(root: Path, as_of: datetime, dry_run: bool) -> dict:
     for kind, key in planned:
         label = f"{kind}:{key}"
         previous = prior["reports"].get(label)
-        if previous is None or policy_changed or affected(kind, key) or previous == "provisional":
+        if force or previous is None or policy_changed or affected(kind, key) or previous == "provisional":
             selected.append((kind, key))
     if dry_run:
         return {"due": [f"{kind}:{key}" for kind, key in selected], "changed_inputs": sorted(changed_paths), "dry_run": True}

@@ -11,6 +11,7 @@ from pathlib import Path
 from worklog.core import WorklogError, capture, close_day, effective, all_revisions
 from worklog.reports import report, build
 from worklog.git_sync import sync
+from worklog.chatgpt_bridge import convert
 from worklog.orchestrate import run_due
 
 POLICY = """schema_version: '1.0'
@@ -235,6 +236,20 @@ class WorklogTests(unittest.TestCase):
         r = report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
         self.assertEqual(r["metrics"]["work_events"], 2)
         self.assertEqual(r["metrics"]["topics"], 1)
+
+    def test_synthetic_chatgpt_bridge_is_stable_and_importable(self):
+        fixture = Path(__file__).parent / "fixtures/synthetic-chatgpt-bridge.json"
+        document = json.loads(fixture.read_text(encoding="utf-8"))
+        candidate = convert(document)
+        saved = json.loads((fixture.parent / "synthetic-chatgpt-candidate.json").read_text(encoding="utf-8"))
+        self.assertEqual(candidate, saved)
+        self.assertEqual(convert(document)["entry_id"], candidate["entry_id"])
+        self.assertTrue(capture(self.root, candidate)["changed"])
+        self.assertFalse(capture(self.root, candidate)["changed"])
+        result = report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
+        self.assertEqual(result["metrics"]["work_events"], 1)
+        self.assertEqual(result["metrics"]["identified_completed_tasks"], 1)
+        self.assertEqual(result["metrics"]["estimated_seconds"], 1800)
 
 
 if __name__ == "__main__":

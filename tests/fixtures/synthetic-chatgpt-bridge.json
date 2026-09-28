@@ -1,0 +1,30 @@
+{
+  "format": "worklog-chatgpt-bridge-1",
+  "synthetic": true,
+  "agent_id": "chatgpt",
+  "source_namespace": "chatgpt",
+  "conversation_id": "synthetic-conversation-sharding-001",
+  "coverage_scope": "synthetic-one-conversation",
+  "recorded_at": "2026-09-28T14:20:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "work": {
+    "source_item_id": "explicit-work-summary-001",
+    "work_date": "2026-09-28",
+    "project_id": "demo-sharding",
+    "task_id": "sharding-plan",
+    "topic_id": "sharding-design",
+    "category": "design",
+    "title": "梳理演示系统的分片策略",
+    "summary": "比较按租户与按时间分片的取舍，并形成供原型实现使用的设计结论。",
+    "actions": ["列出查询与写入场景", "记录分片键取舍"],
+    "status": "completed",
+    "task_state": "completed",
+    "technologies": ["database", "sharding"],
+    "outputs": [
+      {"name": "分片策略决策记录", "kind": "decision", "ref": "synthetic:decision-001"}
+    ],
+    "duration_type": "estimated",
+    "duration_seconds": 1800,
+    "duration_basis": "合成样例中的人工估算，不代表对话首尾间隔"
+  }
+}

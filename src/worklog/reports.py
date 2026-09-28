@@ -271,15 +271,16 @@ def build(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | None
     md = render_markdown(value).encode("utf-8")
     data = canonical(value)
     policy_digest = digest(load_policy(root))
-    fact_fingerprint = digest({"facts": value["facts"], "policy": policy_digest, "rule": "1.0"})
+    fact_fingerprint = digest({"facts": value["facts"], "coverage": value["coverage"], "lifecycle": value["lifecycle"], "completeness": value["completeness"], "metrics": value["metrics"], "policy": policy_digest, "rule": "1.0"})
     template_digest = hashlib.sha256((TEMPLATE_ROOT / "report.html").read_bytes()).hexdigest()
     start, end, _ = period(kind, key, load_policy(root)["timezone"])
-    event_ids = set(value["facts"]["events"]) | {b["entry_id"] for b in value["facts"]["buckets"].values()}
     inputs = {}
     for input_path in revision_files(root):
-        # Include all revisions of contributing events; amended work dates can invalidate both periods.
-        entry_id = input_path.parent.name
-        if entry_id in event_ids:
+        raw = json.loads(input_path.read_text(encoding="utf-8"))
+        raw_days = {date.fromisoformat(raw["work_date"])}
+        for segment in raw["time"]["segments"]:
+            raw_days.add(timestamp(segment["start"]).astimezone(ZoneInfo(value["period"]["timezone"])).date())
+        if (agent_id is None or raw["agent_id"] == agent_id) and any(start <= day < end for day in raw_days):
             inputs[str(input_path.relative_to(root))] = hashlib.sha256(input_path.read_bytes()).hexdigest()
     day = start
     while day < end:
@@ -306,6 +307,11 @@ def build(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | None
         dependencies = [f"quarterly:{start.year}-Q{quarter}" for quarter in range(1, 5)]
     else:
         dependencies = []
+    for dep in dependencies:
+        dep_kind, dep_key, *dep_agent = dep.split(":")
+        dep_path = root / report_path(dep_kind, dep_key, dep_agent[0] if dep_agent else None)
+        if dep_path.exists():
+            inputs[str(dep_path.relative_to(root))] = hashlib.sha256(dep_path.read_bytes()).hexdigest()
     manifest = {"schema_version": "1.0", "report_key": value["report_key"], "inputs": dict(sorted(inputs.items())), "dependencies": dependencies, "policy_digest": policy_digest, "core_version": __version__, "rule_version": "1.0", "template_version": template_digest, "fact_fingerprint": fact_fingerprint, "render_fingerprint": digest({"facts": fact_fingerprint, "template": template_digest}), "outputs": {str(relative): hashlib.sha256(data).hexdigest(), str(md_path.relative_to(root)): hashlib.sha256(md).hexdigest(), str(site_path.relative_to(root)): hashlib.sha256(html).hexdigest()}}
     validate_shape(manifest, "manifest")
     manifest_path = root / "manifests" / (value["report_key"].replace(":", "_") + ".json")

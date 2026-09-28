@@ -16,8 +16,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--data", type=Path, required=True, help="dedicated data directory")
     p.add_argument("--dry-run", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
-    imp = sub.add_parser("import")
-    imp.add_argument("candidate", type=Path)
+    for name in ("import", "capture", "amend", "retract"):
+        imp = sub.add_parser(name)
+        imp.add_argument("candidate", type=Path)
     close = sub.add_parser("close-day")
     close.add_argument("--agent", required=True)
     close.add_argument("--date", required=True)
@@ -27,6 +28,12 @@ def parser() -> argparse.ArgumentParser:
     agg.add_argument("key")
     agg.add_argument("--agent")
     agg.add_argument("--as-of", required=True, help="ISO datetime with offset")
+    for kind in ("daily", "weekly", "monthly", "quarterly", "yearly"):
+        direct = sub.add_parser(kind)
+        direct.add_argument("key")
+        if kind == "daily":
+            direct.add_argument("--agent")
+        direct.add_argument("--as-of", required=True)
     val = sub.add_parser("validate")
     val.add_argument("scope", choices=["raw", "reports", "policy", "all"], default="all")
     stat = sub.add_parser("status")
@@ -38,6 +45,8 @@ def parser() -> argparse.ArgumentParser:
     due.add_argument("--as-of", required=True)
     dash = sub.add_parser("dashboard")
     dash.add_argument("--as-of", required=True)
+    rebuild = sub.add_parser("rebuild")
+    rebuild.add_argument("--as-of", required=True)
     return p
 
 
@@ -45,24 +54,29 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     root = args.data.resolve()
     try:
-        if args.command == "import":
+        if args.command in ("import", "capture", "amend", "retract"):
             candidate = json.loads(args.candidate.read_text(encoding="utf-8"))
+            if args.command in ("amend", "retract") and candidate.get("revision_kind") != args.command:
+                raise WorklogError("REVISION_KIND_MISMATCH")
             result = capture(root, candidate, args.dry_run)
         elif args.command == "close-day":
             result = close_day(root, args.agent, args.date, args.scope, args.dry_run)
-        elif args.command == "aggregate":
+        elif args.command in ("aggregate", "daily", "weekly", "monthly", "quarterly", "yearly"):
             as_of = datetime.fromisoformat(args.as_of)
             if as_of.utcoffset() is None:
                 raise WorklogError("AS_OF_OFFSET_REQUIRED")
+            agent = getattr(args, "agent", None)
+            kind = args.kind if args.command == "aggregate" else ("agent_daily" if args.command == "daily" and agent else args.command)
             if args.dry_run:
-                result = build(root, args.kind, args.key, as_of, args.agent, True)
+                result = build(root, kind, args.key, as_of, agent, True)
             else:
                 from .orchestrate import aggregator_lock
                 with aggregator_lock(root):
-                    result = build(root, args.kind, args.key, as_of, args.agent)
+                    result = build(root, kind, args.key, as_of, agent)
         elif args.command == "validate":
             policy = load_policy(root)
             revisions = all_revisions(root)
+            from .core import validate_shape
             if args.scope in ("raw", "all"):
                 for item in revisions:
                     validate_event(item, policy["timezone"])
@@ -70,9 +84,12 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 conflicts = []
             if args.scope in ("reports", "all"):
-                from .core import validate_shape
                 for path in (root / "reports").rglob("*.json"):
                     validate_shape(json.loads(path.read_text(encoding="utf-8")), "report")
+            if args.scope == "all":
+                for folder, name in (("coverage", "closure"), ("overrides", "override"), ("manifests", "manifest"), ("analysis", "analysis")):
+                    for path in (root / folder).rglob("*.json"):
+                        validate_shape(json.loads(path.read_text(encoding="utf-8")), name)
             result = {"valid": not conflicts, "raw_revisions": len(revisions), "conflicts": conflicts}
         elif args.command == "sync":
             from .git_sync import sync
@@ -83,6 +100,12 @@ def main(argv: list[str] | None = None) -> int:
             if as_of.utcoffset() is None:
                 raise WorklogError("AS_OF_OFFSET_REQUIRED")
             result = run_due(root, as_of, args.dry_run)
+        elif args.command == "rebuild":
+            from .orchestrate import run_due
+            as_of = datetime.fromisoformat(args.as_of)
+            if as_of.utcoffset() is None:
+                raise WorklogError("AS_OF_OFFSET_REQUIRED")
+            result = run_due(root, as_of, args.dry_run, force=True)
         elif args.command == "dashboard":
             from .dashboard import build_dashboard
             from .orchestrate import aggregator_lock
@@ -100,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             value = report(root, "daily", args.date, datetime.now().astimezone())
             result = {"report_key": value["report_key"], "lifecycle": value["lifecycle"], "completeness": value["completeness"], "coverage": value["coverage"], "metrics": value["metrics"]}
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-        if args.command == "aggregate" and result["completeness"] == "incomplete":
+        if args.command in ("aggregate", "daily", "weekly", "monthly", "quarterly", "yearly") and result["completeness"] == "incomplete":
             return 4
         if args.command == "sync" and result["sync"] == "pending":
             return 5

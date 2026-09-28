@@ -13,5 +13,6 @@
 | HTML 注入与发布 | 标签转义，完整站点指针重跑稳定 | 与预期相同 | 通过 |
 | HTML 文件链接 | 相对链接均可解析到本地文件 | 与预期相同 | 通过 |
 | 人工主题映射 | 两个事件归为一主题且来源均保留 | 与预期相同 | 通过 |
+| 合成 ChatGPT 桥接 | 稳定事件 ID、重复导入一次、日报 1 事件 / 1 完成任务 / estimated 1800 秒 | 与预期相同 | 通过 |
 
-运行命令：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`。`quick_validate.py` 检查 Skill 结构通过。`launchd` 已在本机安装并完成一次退出码为 0 的启动运行。其余 T01—T22、D-T01—D-T10 只覆盖部分场景，不标记为全通过。平台真实接入、远端 Git 竞争和七天试运行仍未执行。内置 Browser 安全策略拒绝打开 `file://` 页面，因此窄屏视觉与真实浏览器交互验收未完成。
+运行命令：`PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v`。`quick_validate.py` 检查 Skill 结构通过。`launchd` 已在本机安装并完成一次退出码为 0 的启动运行。其余 T01—T22、D-T01—D-T10 只覆盖部分场景，不标记为全通过。ChatGPT 样例是本项目定义的合成桥接格式，不是官方导出；真实平台接入和七天试运行仍未执行。远端 Git 竞争仅在本地 bare 仓库与两个 clone 中模拟。内置 Browser 安全策略拒绝打开 `file://` 页面，因此窄屏视觉与真实浏览器交互验收未完成。
