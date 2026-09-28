@@ -24,13 +24,13 @@ def changed_paths(root: Path) -> list[str]:
     return sorted(paths)
 
 
-def sync(root: Path, remote: str = "origin", branch: str = "main", dry_run: bool = False) -> dict:
+def sync(root: Path, remote: str = "origin", branch: str = "main", dry_run: bool = False, allowed_prefixes: tuple[str, ...] = ALLOWED) -> dict:
     root = root.resolve()
     top = Path(git(root, "rev-parse", "--show-toplevel").stdout.decode().strip()).resolve()
     if top != root:
         raise WorklogError("DEDICATED_CLONE_REQUIRED", 3)
     paths = changed_paths(root)
-    if any(not path.startswith(ALLOWED) or path.startswith("site/versions/") for path in paths):
+    if any(not path.startswith(allowed_prefixes) or path.startswith("site/versions/") for path in paths):
         raise WorklogError("UNRELATED_GIT_CHANGE", 3)
     if git(root, "diff", "--cached", "--quiet", check=False).returncode != 0:
         raise WorklogError("STAGED_CHANGE_PRESENT", 3)

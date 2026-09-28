@@ -110,6 +110,9 @@ class WorklogTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.root), "add", "policy/worklog.yaml"], check=True)
         subprocess.run(["git", "-C", str(self.root), "commit", "-m", "initial"], check=True, stdout=subprocess.DEVNULL)
         capture(self.root, event(source="sync"))
+        with self.assertRaises(WorklogError) as protected:
+            sync(self.root, allowed_prefixes=("reports/", "manifests/", "site/"))
+        self.assertEqual(protected.exception.code, "UNRELATED_GIT_CHANGE")
         self.assertEqual(sync(self.root)["sync"], "pending")
         self.assertEqual(sync(self.root)["committed"], False)
         (self.root / "unrelated.txt").write_text("user edit")
