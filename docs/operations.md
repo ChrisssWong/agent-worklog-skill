@@ -20,6 +20,8 @@ PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-w
 
 本机已安装 `launchd/com.chris.agent-worklog.plist` 到 `~/Library/LaunchAgents/`，每 900 秒唤醒一次。入口构建后只提交 `reports/`、`manifests/`、`metrics/`、`site/`、`analysis/` 下的派生变更；若存在未提交的 raw、coverage、policy 或 override，停止自动提交并返回安全错误码。没有远端时，本地提交成功但同步状态仍为 pending。可用 `launchctl print gui/501/com.chris.agent-worklog` 查看上次退出码；日志位于数据仓忽略的 `.worklog-runtime/`。停止时用 `launchctl bootout gui/501/com.chris.agent-worklog`，再移除安装的 plist；仓库数据不受影响。
 
+现实时间七天试运行的日志会包含每次 `run_at`、到期节点、完整性与 Git 同步状态。七天结束后执行 `.venv/bin/python scripts/audit_trial.py`；只有七个自然日均有成功运行、没有错误和 incomplete 报告时，才进入人工验收。合成七天时钟测试不能替代这一步。
+
 合成 ChatGPT 桥接样例见 `tests/fixtures/synthetic-chatgpt-bridge.json`，转换命令：
 
 ```sh

@@ -1,6 +1,9 @@
 import copy
 import json
 import subprocess
+import importlib.util
+import io
+from contextlib import redirect_stdout
 from html.parser import HTMLParser
 import tempfile
 import unittest
@@ -227,6 +230,12 @@ class WorklogTests(unittest.TestCase):
         after = report(self.root, "daily", "2026-10-02", now)
         self.assertEqual(after["facts"]["task_snapshot"]["t1"]["state"], "in_progress")
         self.assertEqual(after["metrics"]["unfinished_identified_tasks"], 1)
+        monthly_path = self.root / "reports/2026/monthly/09/summary.json"
+        daily_path = self.root / "reports/2026/daily/10/02/summary.json"
+        expected = (monthly_path.read_bytes(), daily_path.read_bytes())
+        full = run_due(self.root, now, force=True)
+        self.assertEqual(full["changed"], 0)
+        self.assertEqual((monthly_path.read_bytes(), daily_path.read_bytes()), expected)
 
     def test_topic_override_groups_without_dropping_events(self):
         one = event(agent="chatgpt", source="topic-one", topic="initial")
@@ -267,6 +276,60 @@ class WorklogTests(unittest.TestCase):
         self.assertEqual(week["completeness"], "complete")
         self.assertEqual(week["metrics"]["work_events"], 7)
         self.assertEqual(week["metrics"]["estimated_seconds"], 4200)
+
+    def test_restore_from_git_rebuilds_same_report_and_site(self):
+        capture(self.root, event(source="restore", seconds=1200))
+        for agent in ("chatgpt", "codex", "claude-code"):
+            close_day(self.root, agent, "2026-09-28", "synthetic-coverage")
+        when = datetime.fromisoformat("2026-09-29T00:20:00+08:00")
+        run_due(self.root, when)
+        relative_report = Path("reports/2026/daily/09/28/summary.json")
+        expected_report = (self.root / relative_report).read_bytes()
+        expected_site = (self.root / "site/current/index.html").read_bytes()
+        subprocess.run(["git", "-c", "init.templateDir=/dev/null", "init", "-b", "main", str(self.root)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for key, value in (("user.name", "Test"), ("user.email", "test@example.invalid")):
+            subprocess.run(["git", "-C", str(self.root), "config", key, value], check=True)
+        subprocess.run(["git", "-C", str(self.root), "add", "policy", "raw", "coverage"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-m", "source facts"], check=True, stdout=subprocess.DEVNULL)
+        restored = Path(self.temp.name).parent / f"worklog-restore-{uuid.uuid4()}"
+        try:
+            subprocess.run(["git", "-c", "init.templateDir=/dev/null", "clone", str(self.root), str(restored)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            run_due(restored, when)
+            self.assertEqual((restored / relative_report).read_bytes(), expected_report)
+            self.assertEqual((restored / "site/current/index.html").read_bytes(), expected_site)
+        finally:
+            import shutil
+            shutil.rmtree(restored, ignore_errors=True)
+
+    def test_trial_audit_uses_current_report_state(self):
+        script = Path(__file__).parents[1] / "scripts/audit_trial.py"
+        spec = importlib.util.spec_from_file_location("audit_trial_test", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.DATA = self.root
+        module.RUNTIME = self.root / ".worklog-runtime"
+        module.RUNTIME.mkdir()
+        first = datetime.now().astimezone().date() - timedelta(days=10)
+        lines = []
+        for i in range(7):
+            day = first + timedelta(days=i)
+            lines.append(json.dumps({"run_at": f"{day.isoformat()}T12:00:00+08:00", "incomplete": []}))
+            path = self.root / "reports" / day.strftime("%Y/daily/%m/%d/summary.json")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"kind": "daily", "report_key": f"daily:{day.isoformat()}", "period": {"start": f"{day.isoformat()}T00:00:00+08:00", "end": f"{(day + timedelta(days=1)).isoformat()}T00:00:00+08:00"}, "completeness": "complete"}))
+        (module.RUNTIME / "launchd.out.log").write_text("\n".join(lines) + "\n")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            module.main()
+        self.assertEqual(json.loads(out.getvalue())["status"], "ready_for_review")
+        last_path = self.root / "reports" / (first + timedelta(days=6)).strftime("%Y/daily/%m/%d/summary.json")
+        item = json.loads(last_path.read_text())
+        item["completeness"] = "incomplete"
+        last_path.write_text(json.dumps(item))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            module.main()
+        self.assertEqual(json.loads(out.getvalue())["status"], "in_progress_or_incomplete")
 
 
 if __name__ == "__main__":
