@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 import tempfile
 import unittest
 import uuid
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 from worklog.core import WorklogError, capture, close_day, effective, all_revisions
@@ -250,6 +250,20 @@ class WorklogTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["work_events"], 1)
         self.assertEqual(result["metrics"]["identified_completed_tasks"], 1)
         self.assertEqual(result["metrics"]["estimated_seconds"], 1800)
+
+    def test_seven_day_clock_simulation_reaches_weekly(self):
+        start = date(2026, 9, 28)
+        for offset in range(7):
+            day = (start + timedelta(days=offset)).isoformat()
+            capture(self.root, event(day=day, source=f"seven-{offset}", seconds=600))
+            for agent in ("chatgpt", "codex", "claude-code"):
+                close_day(self.root, agent, day, "synthetic-coverage")
+            following = start + timedelta(days=offset + 1)
+            run_due(self.root, datetime.fromisoformat(f"{following.isoformat()}T00:20:00+08:00"))
+        week = report(self.root, "weekly", "2026-W40", datetime.fromisoformat("2026-10-05T00:20:00+08:00"))
+        self.assertEqual(week["completeness"], "complete")
+        self.assertEqual(week["metrics"]["work_events"], 7)
+        self.assertEqual(week["metrics"]["estimated_seconds"], 4200)
 
 
 if __name__ == "__main__":

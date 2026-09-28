@@ -18,6 +18,16 @@ PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-w
 
 `run-due` 从 policy 中最早启用日检查到显式时钟，按日报、周、月、季、年顺序补跑并发布 `site/current/index.html`。同一主机使用进程锁；外部调度器只需周期唤醒。缺声明时生成 incomplete 报告，修订或补录后重跑即可。`--dry-run` 仅列出拟写路径或到期节点，不写文件、不提交、不推送。
 
+本机已安装 `launchd/com.chris.agent-worklog.plist` 到 `~/Library/LaunchAgents/`，每 900 秒唤醒一次。可用 `launchctl print gui/501/com.chris.agent-worklog` 查看上次退出码；日志位于数据仓忽略的 `.worklog-runtime/`。停止时用 `launchctl bootout gui/501/com.chris.agent-worklog`，再移除安装的 plist；仓库数据不受影响。
+
+合成 ChatGPT 桥接样例见 `tests/fixtures/synthetic-chatgpt-bridge.json`，转换命令：
+
+```sh
+.venv/bin/python scripts/convert_chatgpt_bridge.py tests/fixtures/synthetic-chatgpt-bridge.json /private/tmp/chatgpt-candidate.json
+```
+
+该转换只认本项目的明确工作声明格式。真实 ChatGPT 导出需获得授权样例后重新适配，不能把合成测试当作平台兼容证明。
+
 ## 修订与恢复
 
 修订候选保留原 `entry_id`、`partition_date`、`agent_id`，赋予新 `revision_id`，填写 `parent_revision_ids`、`revision_kind` 与 `revision_reason`，再使用同一导入命令。冲突分支需 resolve 引用全部叶节点。旧关闭声明在输入摘要变化后自动失效，须重新 close-day。
@@ -27,4 +37,3 @@ PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-w
 ## 当前限制
 
 真实平台接入和七天试运行尚未执行。当前运行只支持一个本机聚合执行通道；Git 目录归属只由 CLI 检查，不是服务端权限隔离。模型分析默认关闭。站点仅供本地阅读，未配置远端与公开托管。
-
