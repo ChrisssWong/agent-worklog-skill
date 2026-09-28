@@ -44,6 +44,11 @@ def main() -> None:
             daily_path = DATA / "reports" / day.strftime("%Y/daily/%m/%d/summary.json")
             if today > day and not daily_path.exists():
                 incomplete.append(f"missing_daily:{day_text}")
+            if day.weekday() == 6 and today > day:
+                iso = day.isocalendar()
+                weekly_path = DATA / "reports" / str(iso.year) / "weekly" / f"W{iso.week:02d}" / "summary.json"
+                if not weekly_path.exists():
+                    incomplete.append(f"missing_weekly:{iso.year}-W{iso.week:02d}")
         for path in (DATA / "reports").rglob("*.json"):
             try:
                 report = json.loads(path.read_text(encoding="utf-8"))

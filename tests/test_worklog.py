@@ -317,6 +317,12 @@ class WorklogTests(unittest.TestCase):
             path = self.root / "reports" / day.strftime("%Y/daily/%m/%d/summary.json")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps({"kind": "daily", "report_key": f"daily:{day.isoformat()}", "period": {"start": f"{day.isoformat()}T00:00:00+08:00", "end": f"{(day + timedelta(days=1)).isoformat()}T00:00:00+08:00"}, "completeness": "complete"}))
+            if day.weekday() == 6:
+                iso = day.isocalendar()
+                week_path = self.root / "reports" / str(iso.year) / "weekly" / f"W{iso.week:02d}" / "summary.json"
+                week_path.parent.mkdir(parents=True, exist_ok=True)
+                week_start = day - timedelta(days=6)
+                week_path.write_text(json.dumps({"kind": "weekly", "report_key": f"weekly:{iso.year}-W{iso.week:02d}", "period": {"start": f"{week_start.isoformat()}T00:00:00+08:00", "end": f"{(day + timedelta(days=1)).isoformat()}T00:00:00+08:00"}, "completeness": "complete"}))
         (module.RUNTIME / "launchd.out.log").write_text("\n".join(lines) + "\n")
         out = io.StringIO()
         with redirect_stdout(out):
