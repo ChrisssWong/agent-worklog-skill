@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "closure_id", "agent_id", "work_date", "coverage_scope", "included_revision_ids", "input_digest", "declared_at", "state", "supersedes_closure_ids"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "closure_id": {"type": "string", "format": "uuid"},
+    "agent_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+    "work_date": {"type": "string", "format": "date"},
+    "coverage_scope": {"type": "string", "minLength": 1, "maxLength": 500},
+    "included_revision_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
+    "input_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "declared_at": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["reported", "no_activity"]},
+    "supersedes_closure_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uuid"}}
+  }
+}

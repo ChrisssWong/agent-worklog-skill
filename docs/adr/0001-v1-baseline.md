@@ -1,0 +1,8 @@
+# ADR 0001：V1 实施基线
+
+状态：已批准，依据《Multi-Agent-Worklog-V1-实施设计审批稿》文末 A01—A11 同意记录及本次实施请求。
+
+采用两个本地独立目录，后续分别初始化 Git；数据仓默认私有，现阶段无远端。Python 3.12、JSON Schema Draft 2020-12、YAML 安全配置、Jinja2 静态 HTML。Agent 只提交事件与覆盖声明，Aggregator 单写所有报告。不可变修订图、日级统计分支、时长与任务身份口径及本地发布均遵守 [协议](../../references/protocol.md)。
+
+V1 不声明拥有其他 Agent 私有历史，不自动公开页面，不接入未经核实的模型服务。真实 Adapter 能力与调度宿主需在环境登记后逐项实测。
+

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "report_key", "inputs", "dependencies", "policy_digest", "core_version", "rule_version", "template_version", "fact_fingerprint", "render_fingerprint", "outputs"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "report_key": {"type": "string"},
+    "inputs": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}},
+    "dependencies": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "policy_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "core_version": {"type": "string"},
+    "rule_version": {"type": "string"},
+    "template_version": {"type": "string"},
+    "fact_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "render_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "outputs": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+  }
+}

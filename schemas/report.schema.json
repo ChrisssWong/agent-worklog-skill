@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "report_key", "kind", "agent_id", "period", "coverage", "lifecycle", "completeness", "facts", "metrics", "sections", "provenance", "analysis"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "report_key": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["agent_daily", "daily", "weekly", "monthly", "quarterly", "yearly"]},
+    "agent_id": {"type": ["string", "null"]},
+    "period": {"type": "object", "additionalProperties": false, "required": ["key", "timezone", "start", "end"], "properties": {"key": {"type": "string"}, "timezone": {"type": "string"}, "start": {"type": "string", "format": "date-time"}, "end": {"type": "string", "format": "date-time"}}},
+    "coverage": {"type": "object", "required": ["expected", "received", "missing", "conflicts"], "properties": {"expected": {"type": "array", "items": {"type": "string"}}, "received": {"type": "array", "items": {"type": "string"}}, "missing": {"type": "array", "items": {"type": "string"}}, "conflicts": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false},
+    "lifecycle": {"enum": ["provisional", "closed"]},
+    "completeness": {"enum": ["complete", "incomplete"]},
+    "facts": {"type": "object"},
+    "metrics": {"type": "object"},
+    "sections": {"type": "object"},
+    "provenance": {"type": "object"},
+    "analysis": {"type": "object", "required": ["mode", "status"], "properties": {"mode": {"enum": ["template", "model"]}, "status": {"enum": ["available", "unavailable", "rejected"]}}, "additionalProperties": true}
+  }
+}
