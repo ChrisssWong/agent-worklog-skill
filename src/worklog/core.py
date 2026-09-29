@@ -59,7 +59,8 @@ def timestamp(value: str) -> datetime:
 
 
 def validate_event(event: dict, timezone: str) -> None:
-    validate_shape(event, "event")
+    version = event.get("schema_version")
+    validate_shape(event, "event-v1.0" if version == "1.0" else "event")
     try:
         ZoneInfo(timezone)
         ZoneInfo(event["timezone"])
@@ -85,8 +86,10 @@ def validate_event(event: dict, timezone: str) -> None:
     t = event["time"]
     duration = t["duration_seconds"]
     dtype = t["duration_type"]
-    if (dtype == "unknown") != (duration is None):
+    if (dtype is None or dtype == "unknown") != (duration is None):
         raise WorklogError("DURATION_TYPE_MISMATCH")
+    if dtype is None and (t["evidence_ref"] is not None or t["segments"] or t["allocation_method"] != "work_date"):
+        raise WorklogError("EMPTY_DURATION_INVALID")
     if dtype == "exact" and not t["evidence_ref"]:
         raise WorklogError("EXACT_EVIDENCE_REQUIRED")
     if dtype == "estimated" and not t["evidence_ref"]:
@@ -158,6 +161,11 @@ def load_policy(root: Path) -> dict:
         raise WorklogError("CONFIG_INVALID") from exc
 
 
+def site_style(policy: dict) -> str:
+    """Return the configured site style; legacy policies default to the ledger."""
+    return policy.get("site", {}).get("style", "ledger")
+
+
 def confined(root: Path, relative: Path) -> Path:
     if relative.is_absolute() or ".." in relative.parts:
         raise WorklogError("PATH_REJECTED", 3)
@@ -209,7 +217,7 @@ def all_revisions(root: Path) -> list[dict]:
 def effective(revisions: list[dict]) -> tuple[list[dict], list[str]]:
     groups = defaultdict(dict)
     for item in revisions:
-        validate_shape(item, "event")
+        validate_shape(item, "event-v1.0" if item.get("schema_version") == "1.0" else "event")
         key = item["entry_id"]
         rid = item["revision_id"]
         if rid in groups[key] and groups[key][rid] != item:
@@ -274,6 +282,8 @@ def capture(root: Path, candidate: dict, dry_run: bool = False) -> dict:
     policy = load_policy(root)
     if not isinstance(candidate, dict):
         raise WorklogError("CANDIDATE_INVALID")
+    if candidate.get("schema_version") != "1.1":
+        raise WorklogError("EVENT_SCHEMA_VERSION_UNSUPPORTED")
     event = safe_text(candidate, policy["privacy"]["excluded_terms"])
     validate_event(event, policy["timezone"])
     if event["agent_id"] not in {a["agent_id"] for a in policy["agents"]}:

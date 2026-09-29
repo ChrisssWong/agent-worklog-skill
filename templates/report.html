@@ -1,9 +1,58 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ report.report_key }}</title><style>
-:root{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;color:#183047;background:#f5f7f8}body{max-width:960px;margin:auto;padding:1.5rem}header,section{background:white;border-radius:12px;padding:1.3rem;margin:1rem 0;box-shadow:0 1px 7px #dce3e8}h1{font-size:1.8rem}h2{font-size:1.2rem}.meta{color:#526777}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.7rem}.metric{background:#eaf2f4;padding:1rem;border-radius:8px}.metric strong{display:block;font-size:1.5rem}li{margin:.5rem 0;overflow-wrap:anywhere}code{overflow-wrap:anywhere}a{color:#135b83}@media(max-width:600px){body{padding:.6rem}header,section{padding:1rem}}
-</style></head><body>
-<header><h1>{{ report.report_key }}</h1><p class="meta">{{ report.period.start }} 至 {{ report.period.end }} · {{ report.lifecycle }} · {{ report.completeness }}</p><p>来源完整性：已收到 {{ report.coverage.received|length }} / 预期 {{ report.coverage.expected|length }}；冲突 {{ report.coverage.conflicts|length }}</p></header>
-<section><h2>概览</h2><div class="grid"><div class="metric"><strong>{{ report.metrics.work_events }}</strong>工作事件</div><div class="metric"><strong>{{ report.metrics.completed_events }}</strong>完成事件</div><div class="metric"><strong>{{ report.metrics.identified_completed_tasks }}</strong>已识别完成任务</div><div class="metric"><strong>{{ report.metrics.active_projects }}</strong>活跃项目</div><div class="metric"><strong>{{ report.metrics.unfinished_identified_tasks }}</strong>期末未完成任务</div></div><p>Agent 记录时长：exact {{ report.metrics.exact_seconds }} 秒；estimated {{ report.metrics.estimated_seconds }} 秒；未知时长 {{ report.metrics.unknown_duration_events }} 条。多 Agent 时间可能重叠。未决任务状态 {{ report.metrics.unresolved_task_states }} 条。</p></section>
-{% for name,label in [('achievements','成果'),('learning','学习'),('problems','问题'),('decisions','决策'),('unfinished','未完成'),('suggestions','下一步建议')] %}<section><h2>{{ label }}</h2>{% if report.sections[name] %}<ul>{% for row in report.sections[name] %}<li>{{ row.work_date }} · {{ row.title }} · {{ row.agent_id }} · {{ row.project_id }}<p>{{ row.summary }}</p><small>来源 <code>{{ row.entry_id }}</code></small></li>{% endfor %}</ul>{% else %}<p class="meta">暂无有来源的记录</p>{% endif %}</section>{% endfor %}
-<section><h2>来源与覆盖</h2>{% if report.coverage.missing %}<p>缺失上报或依赖：{{ report.coverage.missing|join(', ') }}</p>{% endif %}<ul>{% for id,ref in report.provenance.items() %}<li><code>{{ id }}</code> · 修订 <code>{{ ref.revision_id }}</code> · {{ ref.source_refs|join(', ') }}</li>{% endfor %}</ul></section>
-</body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ report_title }}</title>
+  <style>{% include "site.css" %}</style>
+</head>
+<body data-style="{{ style }}">
+  <div class="shell">
+    <header class="masthead">
+      <a class="brand" href="{{ root_prefix }}index.html">工作日志</a>
+      <nav aria-label="页面导航"><ul class="nav">
+        <li><a href="{{ root_prefix }}index.html">总览</a></li>
+        <li><a href="{{ root_prefix }}growth/index.html">成长记录</a></li>
+      </ul></nav>
+      <small>{{ report_label }} · {{ report.period.key }}</small>
+    </header>
+    <div class="layout">
+      <aside class="rail" aria-label="报告范围">
+        <div class="kicker">{{ report.kind|upper }} / {{ report.period.key }}</div>
+        <strong>{{ report_label }}</strong>
+        <div>{{ report.period.start[:10] }}<br>— {{ report.period.end[:10] }}</div>
+        <div class="rail-rule"></div>
+        <div>{{ report.metrics.work_events }} 条工作记录</div>
+      </aside>
+      <main class="content">
+        <div class="page-head">
+          <div class="kicker">{{ report_label }} / {{ report.period.key }}</div>
+          <h1>{{ report_title }}</h1>
+          <p class="intro">{{ report.period.start[:10] }} 至 {{ report.period.end[:10] }}</p>
+          <div class="meta-line"><span class="status">{% if report.coverage.conflicts %}记录存在冲突，部分工作未纳入{% elif report.lifecycle == 'provisional' %}{% if report.kind in ['daily', 'agent_daily'] %}当日记录仍在更新{% else %}本期记录仍在更新{% endif %}{% elif report.completeness == 'incomplete' %}记录尚未确认完整{% else %}已完成{% endif %}</span></div>
+        </div>
+        <section class="section" aria-labelledby="report-overview">
+          <div class="section-head"><h2 id="report-overview">概览</h2><small>报告指标</small></div>
+          <div class="metrics metrics-five" aria-label="报告指标">
+            <div class="metric"><strong>{{ report.metrics.work_events }}</strong><span>工作记录</span></div>
+            <div class="metric"><strong>{{ report.metrics.completed_events }}</strong><span>已完成记录</span></div>
+            <div class="metric"><strong>{{ report.metrics.identified_completed_tasks }}</strong><span>已识别完成任务</span></div>
+            <div class="metric"><strong>{{ report.metrics.active_projects }}</strong><span>活跃项目</span></div>
+            <div class="metric"><strong>{{ report.metrics.unfinished_identified_tasks }}</strong><span>期末未完成任务</span></div>
+          </div>
+        </section>
+        {% set sections = [('achievements','成果'),('learning','学习'),('problems','问题'),('decisions','决策'),('unfinished','未完成'),('suggestions','下一步建议')] %}
+        {% for name,label in sections if report.sections[name] %}
+        <section class="section" aria-labelledby="section-{{ name }}">
+          <div class="section-head"><h2 id="section-{{ name }}">{{ label }}</h2><small>共 {{ report.sections[name]|length }} 条</small></div>
+          {% for row in report.sections[name] %}<article class="record"><div class="record-date">{{ row.work_date }}</div><div><h3>{{ row.title }}</h3><p>{{ row.summary }}</p><div class="record-tags"><span>{{ row.agent_id }}</span><span>{{ row.project_id }}</span></div></div></article>{% endfor %}
+        </section>
+        {% endfor %}
+        {% set empty = namespace(count=0) %}{% for name,label in sections %}{% if not report.sections[name] %}{% set empty.count = empty.count + 1 %}{% endif %}{% endfor %}
+        {% if empty.count %}<section class="section" aria-labelledby="empty-sections"><div class="section-head"><h2 id="empty-sections">其他栏目</h2><small>暂无新增记录</small></div><div class="report-sections">{% for name,label in sections if not report.sections[name] %}<div class="report-mini"><h3>{{ label }}</h3><p>暂无记录</p></div>{% endfor %}</div></section>{% endif %}
+      </main>
+    </div>
+    <footer class="foot"><span>工作日志</span><span>{{ report.period.start[:10] }} 至 {{ report.period.end[:10] }}</span></footer>
+  </div>
+</body>
+</html>

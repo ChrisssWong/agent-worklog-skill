@@ -8,6 +8,7 @@
     "aggregator_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
     "agents": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["agent_id", "required", "enabled_from"], "properties": {"agent_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}, "required": {"type": "boolean"}, "enabled_from": {"type": "string", "format": "date"}, "enabled_until": {"type": ["string", "null"], "format": "date"}}}},
     "privacy": {"type": "object", "additionalProperties": false, "required": ["excluded_terms"], "properties": {"excluded_terms": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 200}}}},
-    "schedule": {"type": "object", "additionalProperties": false, "required": ["provisional_time", "close_time"], "properties": {"provisional_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}, "close_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}}}
+    "schedule": {"type": "object", "additionalProperties": false, "required": ["provisional_time", "close_time"], "properties": {"provisional_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}, "close_time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$"}}},
+    "site": {"type": "object", "additionalProperties": false, "required": ["style"], "properties": {"style": {"type": "string", "enum": ["ledger", "blue"]}}}
   }
 }

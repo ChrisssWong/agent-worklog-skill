@@ -16,11 +16,7 @@ PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-w
 PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-worklog-data sync
 ```
 
-`run-due` 从 policy 中最早启用日检查到显式时钟，按日报、周、月、季、年顺序补跑并发布 `site/current/index.html`。同一主机使用进程锁；外部调度器只需周期唤醒。缺声明时生成 incomplete 报告，修订或补录后重跑即可。`--dry-run` 仅列出拟写路径或到期节点，不写文件、不提交、不推送。
-
-本机已安装 `launchd/com.chris.agent-worklog.plist` 到 `~/Library/LaunchAgents/`，每 900 秒唤醒一次。入口构建后只提交 `reports/`、`manifests/`、`metrics/`、`site/`、`analysis/` 下的派生变更；若存在未提交的 raw、coverage、policy 或 override，停止自动提交并返回安全错误码。没有远端时，本地提交成功但同步状态仍为 pending。可用 `launchctl print gui/501/com.chris.agent-worklog` 查看上次退出码；日志位于数据仓忽略的 `.worklog-runtime/`。停止时用 `launchctl bootout gui/501/com.chris.agent-worklog`，再移除安装的 plist；仓库数据不受影响。
-
-现实时间七天试运行的日志会包含每次 `run_at`、到期节点、完整性与 Git 同步状态。七天结束后执行 `.venv/bin/python scripts/audit_trial.py`；只有七个自然日均有成功运行、没有错误和 incomplete 报告时，才进入人工验收。合成七天时钟测试不能替代这一步。
+`run-due` 从 policy 中最早启用日检查到显式时钟，按日报、周、月、季、年顺序补跑并发布 `site/current/index.html`。同一主机使用进程锁；外部调度器只需周期唤醒。缺有效 `full-day` 声明时，报告 JSON 保持 incomplete；读者页面显示通俗状态，具体缺失 Agent 由 `status` 和 JSON 查看。`current-task` 不满足全天完整性，修订或补录后须重新确认并声明覆盖范围，再重跑报告。`--dry-run` 仅列出拟写路径或到期节点，不写文件、不提交、不推送。
 
 合成 ChatGPT 桥接样例见 `tests/fixtures/synthetic-chatgpt-bridge.json`，转换命令：
 
@@ -38,4 +34,4 @@ PYTHONPATH=src .venv/bin/python -m worklog --data /Users/wk/Documents/AI/agent-w
 
 ## 当前限制
 
-真实平台接入和七天试运行尚未执行。当前运行只支持一个本机聚合执行通道；Git 目录归属只由 CLI 检查，不是服务端权限隔离。模型分析默认关闭。站点仅供本地阅读，未配置远端与公开托管。
+真实平台接入尚未执行。当前运行只支持一个本机聚合执行通道；Git 目录归属只由 CLI 检查，不是服务端权限隔离。模型分析默认关闭。站点仅供本地阅读，未配置远端与公开托管。

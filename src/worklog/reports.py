@@ -12,9 +12,14 @@ from zoneinfo import ZoneInfo
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from . import __version__
-from .core import WorklogError, all_revisions, canonical, closure_digest, digest, effective, load_policy, revision_files, timestamp, validate_shape
+from .core import WorklogError, all_revisions, canonical, closure_digest, digest, effective, load_policy, revision_files, site_style, timestamp, validate_shape
 
 TEMPLATE_ROOT = Path(__file__).resolve().parents[2] / "templates"
+
+
+def html_bytes(rendered: str) -> bytes:
+    """Normalize template whitespace without changing visible content."""
+    return ("\n".join(line.rstrip() for line in rendered.splitlines()) + "\n").encode("utf-8")
 
 
 def period(kind: str, key: str, zone: str) -> tuple[date, date, str]:
@@ -112,7 +117,7 @@ def metrics(facts: dict) -> dict:
     buckets = list(facts["buckets"].values())
     task_ids = {e["task_id"] for e in events if e["task_id"]}
     completed = {v["task_id"] for v in facts["task_states"].values() if v["state"] == "completed"}
-    known = {e["entry_id"] for e in events if e["time"]["duration_type"] != "unknown"}
+    known = {e["entry_id"] for e in events if e["time"]["duration_seconds"] is not None}
     exact = sum(b["seconds"] for b in buckets if b["duration_type"] == "exact")
     estimated = sum(b["seconds"] for b in buckets if b["duration_type"] == "estimated")
     project_seconds = defaultdict(int)
@@ -122,7 +127,7 @@ def metrics(facts: dict) -> dict:
         for tech in b["technologies"]:
             technology_seconds[tech] += b["seconds"]
     count = len(events)
-    return {"work_events": count, "completed_events": sum(e["status"] == "completed" for e in events), "identified_completed_tasks": len(completed), "identified_tasks": len(task_ids), "task_identity_coverage": (len([e for e in events if e["task_id"]]) / count if count else None), "active_projects": len({e["project_id"] for e in events}), "active_agents": len({e["agent_id"] for e in events}), "topics": len({e["topic_id"] or f"unassigned:{e['entry_id']}" for e in events}), "exact_seconds": exact, "estimated_seconds": estimated, "unknown_duration_events": sum(e["time"]["duration_type"] == "unknown" for e in events), "time_record_coverage": (len(known) / count if count else None), "project_seconds": dict(sorted(project_seconds.items())), "technology_seconds_overlapping": dict(sorted(technology_seconds.items())), "unfinished_identified_tasks": sum(x["state"] in ("planned", "in_progress", "blocked") for x in facts["task_snapshot"].values()), "unresolved_task_states": sum(x["state"] == "unresolved" for x in facts["task_snapshot"].values())}
+    return {"work_events": count, "completed_events": sum(e["status"] == "completed" for e in events), "identified_completed_tasks": len(completed), "identified_tasks": len(task_ids), "task_identity_coverage": (len([e for e in events if e["task_id"]]) / count if count else None), "active_projects": len({e["project_id"] for e in events}), "active_agents": len({e["agent_id"] for e in events}), "topics": len({e["topic_id"] or f"unassigned:{e['entry_id']}" for e in events}), "exact_seconds": exact, "estimated_seconds": estimated, "time_record_coverage": (len(known) / count if count else None), "project_seconds": dict(sorted(project_seconds.items())), "technology_seconds_overlapping": dict(sorted(technology_seconds.items())), "unfinished_identified_tasks": sum(x["state"] in ("planned", "in_progress", "blocked") for x in facts["task_snapshot"].values()), "unresolved_task_states": sum(x["state"] == "unresolved" for x in facts["task_snapshot"].values())}
 
 
 def task_snapshot(events: list[dict], cutoff: datetime) -> dict:
@@ -177,7 +182,7 @@ def daily_coverage(root: Path, policy: dict, day: date, events: list[dict], conf
         for file in folder.glob("*.json"):
             closure = json.loads(file.read_text(encoding="utf-8"))
             validate_shape(closure, "closure")
-            if closure["input_digest"] == current_digest:
+            if closure["coverage_scope"] == "full-day" and closure["input_digest"] == current_digest:
                 received.append(agent["agent_id"])
                 break
     received = sorted(set(received))
@@ -242,11 +247,17 @@ def report(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | Non
 
 def render_markdown(value: dict) -> str:
     m = value["metrics"]
-    lines = [f"# {value['report_key']}", "", f"状态：{value['lifecycle']} / {value['completeness']}", f"事件：{m['work_events']}；完成事件：{m['completed_events']}；已识别完成任务：{m['identified_completed_tasks']}", f"Agent 记录时长：exact {m['exact_seconds']} 秒，estimated {m['estimated_seconds']} 秒；未知 {m['unknown_duration_events']} 条", "", "## 工作事项", ""]
+    if value["coverage"]["conflicts"]:
+        state = "记录存在冲突，部分工作未纳入"
+    elif value["lifecycle"] == "provisional":
+        state = "当日记录仍在更新" if value["kind"] in ("daily", "agent_daily") else "本期记录仍在更新"
+    elif value["completeness"] == "incomplete":
+        state = "记录尚未确认完整"
+    else:
+        state = "已完成"
+    lines = [f"# {value['report_key']}", "", f"状态：{state}", f"工作记录：{m['work_events']}；已完成记录：{m['completed_events']}；已识别完成任务：{m['identified_completed_tasks']}", "", "## 工作事项", ""]
     for row in value["sections"]["achievements"] + value["sections"]["unfinished"] + value["sections"]["problems"]:
-        lines.append(f"- {row['work_date']} {row['title']}（{row['agent_id']}，来源 {row['entry_id']}）")
-    if value["coverage"]["missing"]:
-        lines.extend(["", "缺失上报或下级依赖：" + ", ".join(value["coverage"]["missing"])])
+        lines.append(f"- {row['work_date']} {row['title']}（{row['agent_id']}）")
     return "\n".join(lines) + "\n"
 
 
@@ -267,13 +278,18 @@ def build(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | None
     md_path = path.with_suffix(".md")
     site_path = root / "site" / kind / key / (agent_id or "index") / "index.html"
     env = Environment(loader=FileSystemLoader(TEMPLATE_ROOT), autoescape=select_autoescape(["html"]))
-    html = env.get_template("report.html").render(report=value).encode("utf-8")
+    policy = load_policy(root)
+    labels = {"daily": "日报", "agent_daily": "Agent 日报", "weekly": "周报", "monthly": "月报", "quarterly": "季报", "yearly": "年报"}
+    report_label = labels[kind]
+    report_title = f"{key} {report_label}" + (f" · {agent_id}" if agent_id else "")
+    root_prefix = "../" * (len(site_path.relative_to(root).parts) - 2)
+    html = html_bytes(env.get_template("report.html").render(report=value, style=site_style(policy), report_label=report_label, report_title=report_title, root_prefix=root_prefix))
     md = render_markdown(value).encode("utf-8")
     data = canonical(value)
-    policy_digest = digest(load_policy(root))
+    policy_digest = digest({k: v for k, v in policy.items() if k != "site"})
     fact_fingerprint = digest({"facts": value["facts"], "coverage": value["coverage"], "lifecycle": value["lifecycle"], "completeness": value["completeness"], "metrics": value["metrics"], "policy": policy_digest, "rule": "1.0"})
-    template_digest = hashlib.sha256((TEMPLATE_ROOT / "report.html").read_bytes()).hexdigest()
-    start, end, _ = period(kind, key, load_policy(root)["timezone"])
+    template_digest = hashlib.sha256((TEMPLATE_ROOT / "report.html").read_bytes() + (TEMPLATE_ROOT / "site.css").read_bytes()).hexdigest()
+    start, end, _ = period(kind, key, policy["timezone"])
     inputs = {}
     for input_path in revision_files(root):
         raw = json.loads(input_path.read_text(encoding="utf-8"))
@@ -312,7 +328,7 @@ def build(root: Path, kind: str, key: str, as_of: datetime, agent_id: str | None
         dep_path = root / report_path(dep_kind, dep_key, dep_agent[0] if dep_agent else None)
         if dep_path.exists():
             inputs[str(dep_path.relative_to(root))] = hashlib.sha256(dep_path.read_bytes()).hexdigest()
-    manifest = {"schema_version": "1.0", "report_key": value["report_key"], "inputs": dict(sorted(inputs.items())), "dependencies": dependencies, "policy_digest": policy_digest, "core_version": __version__, "rule_version": "1.0", "template_version": template_digest, "fact_fingerprint": fact_fingerprint, "render_fingerprint": digest({"facts": fact_fingerprint, "template": template_digest}), "outputs": {str(relative): hashlib.sha256(data).hexdigest(), str(md_path.relative_to(root)): hashlib.sha256(md).hexdigest(), str(site_path.relative_to(root)): hashlib.sha256(html).hexdigest()}}
+    manifest = {"schema_version": "1.0", "report_key": value["report_key"], "inputs": dict(sorted(inputs.items())), "dependencies": dependencies, "policy_digest": policy_digest, "core_version": __version__, "rule_version": "1.0", "template_version": template_digest, "fact_fingerprint": fact_fingerprint, "render_fingerprint": digest({"facts": fact_fingerprint, "template": template_digest, "site_style": site_style(policy)}), "outputs": {str(relative): hashlib.sha256(data).hexdigest(), str(md_path.relative_to(root)): hashlib.sha256(md).hexdigest(), str(site_path.relative_to(root)): hashlib.sha256(html).hexdigest()}}
     validate_shape(manifest, "manifest")
     manifest_path = root / "manifests" / (value["report_key"].replace(":", "_") + ".json")
     if dry_run:

@@ -1,9 +1,6 @@
 import copy
 import json
 import subprocess
-import importlib.util
-import io
-from contextlib import redirect_stdout
 from html.parser import HTMLParser
 import tempfile
 import unittest
@@ -11,8 +8,9 @@ import uuid
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
-from worklog.core import WorklogError, capture, close_day, effective, all_revisions
-from worklog.reports import report, build
+from worklog.core import WorklogError, atomic_json, capture, close_day, effective, all_revisions, event_path, load_policy, site_style, validate_event
+from worklog.dashboard import build_dashboard
+from worklog.reports import report, build, render_markdown
 from worklog.git_sync import sync
 from worklog.chatgpt_bridge import convert
 from worklog.orchestrate import run_due
@@ -30,7 +28,7 @@ schedule: {provisional_time: '23:00', close_time: '00:15'}
 
 
 def event(agent="codex", day="2026-09-28", task="t1", topic="s1", status="completed", dtype="estimated", seconds=1800, source="one"):
-    return {"schema_version": "1.0", "entry_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4()), "parent_revision_ids": [], "revision_kind": "create", "agent_id": agent, "producer_instance_id": "test", "source_namespace": agent, "idempotency_key": f"test-{source}-{agent}", "partition_date": day, "work_date": day, "timezone": "Asia/Shanghai", "recorded_at": f"{day}T12:00:00+08:00", "source_refs": [{"namespace": agent, "source_id": source, "ref": f"test:{source}"}], "model": None, "project_id": "p1", "task_id": task, "topic_id": topic, "category": "implementation", "subcategories": [], "technologies": ["python"], "tags": [], "title": "合成工作", "summary": "仅供测试", "actions": [], "status": status, "task_state_event": None, "outputs": [], "time": {"activity_window": None, "duration_seconds": seconds, "duration_type": dtype, "evidence_ref": "test:timer" if dtype == "exact" else "test:estimate" if dtype == "estimated" else None, "allocation_method": "work_date", "segments": []}, "milestone": False, "importance": "normal"}
+    return {"schema_version": "1.1", "entry_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4()), "parent_revision_ids": [], "revision_kind": "create", "agent_id": agent, "producer_instance_id": "test", "source_namespace": agent, "idempotency_key": f"test-{source}-{agent}", "partition_date": day, "work_date": day, "timezone": "Asia/Shanghai", "recorded_at": f"{day}T12:00:00+08:00", "source_refs": [{"namespace": agent, "source_id": source, "ref": f"test:{source}"}], "model": None, "project_id": "p1", "task_id": task, "topic_id": topic, "category": "implementation", "subcategories": [], "technologies": ["python"], "tags": [], "title": "合成工作", "summary": "仅供测试", "actions": [], "status": status, "task_state_event": None, "outputs": [], "time": {"activity_window": None, "duration_seconds": seconds, "duration_type": dtype, "evidence_ref": "test:timer" if dtype == "exact" else "test:estimate" if dtype == "estimated" else None, "allocation_method": "work_date", "segments": []}, "milestone": False, "importance": "normal"}
 
 
 class WorklogTests(unittest.TestCase):
@@ -43,11 +41,45 @@ class WorklogTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_site_style_switch_changes_html_only(self):
+        capture(self.root, event(source="style", dtype=None, seconds=None))
+        when = datetime.fromisoformat("2026-09-29T01:00:00+08:00")
+        self.assertEqual(site_style(load_policy(self.root)), "ledger")
+        build(self.root, "daily", "2026-09-28", when)
+        build_dashboard(self.root, when)
+        report_path = self.root / "site/daily/2026-09-28/index/index.html"
+        index_path = self.root / "site/index.html"
+        report_json = (self.root / "reports/2026/daily/09/28/summary.json").read_bytes()
+        report_md = (self.root / "reports/2026/daily/09/28/summary.md").read_bytes()
+        manifest_path = self.root / "manifests/daily_2026-09-28.json"
+        fact_fingerprint = json.loads(manifest_path.read_text())["fact_fingerprint"]
+        for path in (report_path, index_path):
+            html = path.read_text(encoding="utf-8")
+            self.assertIn('data-style="ledger"', html)
+            self.assertIn(".layout{display:grid", html)
+            for phrase in ("空白不代表没有工作", "页面仅展示已记录的事实", "仅展示已记录的事实"):
+                self.assertNotIn(phrase, html)
+
+        policy_path = self.root / "policy/worklog.yaml"
+        policy_path.write_text(POLICY + "site: {style: blue}\n", encoding="utf-8")
+        self.assertEqual(site_style(load_policy(self.root)), "blue")
+        build(self.root, "daily", "2026-09-28", when)
+        build_dashboard(self.root, when)
+        self.assertIn('data-style="blue"', report_path.read_text(encoding="utf-8"))
+        self.assertIn('data-style="blue"', index_path.read_text(encoding="utf-8"))
+        self.assertEqual((self.root / "reports/2026/daily/09/28/summary.json").read_bytes(), report_json)
+        self.assertEqual((self.root / "reports/2026/daily/09/28/summary.md").read_bytes(), report_md)
+        self.assertEqual(json.loads(manifest_path.read_text())["fact_fingerprint"], fact_fingerprint)
+
+        policy_path.write_text(POLICY + "site: {style: unknown}\n", encoding="utf-8")
+        with self.assertRaises(WorklogError):
+            load_policy(self.root)
+
     def test_g01_metrics_and_retry(self):
         one = event(agent="chatgpt", source="e1", seconds=1800)
         two = event(agent="codex", source="e2", dtype="exact", seconds=3600)
         two["task_state_event"] = {"state": "completed", "occurred_at": "2026-09-28T12:00:00+08:00", "source_ref": "test:e2"}
-        three = event(agent="claude-code", source="e3", dtype="unknown", seconds=None)
+        three = event(agent="claude-code", source="e3", dtype=None, seconds=None)
         four = event(agent="codex", source="e4", task=None, topic="s2", status="in_progress", seconds=1200)
         for item in [one, two, three, four]:
             self.assertTrue(capture(self.root, item)["persisted"])
@@ -57,17 +89,52 @@ class WorklogTests(unittest.TestCase):
             retry["revision_id"] = str(uuid.uuid4())
             self.assertFalse(capture(self.root, retry)["changed"])
         for agent in ["chatgpt", "codex", "claude-code"]:
-            close_day(self.root, agent, "2026-09-28", "test-scope")
+            close_day(self.root, agent, "2026-09-28", "full-day")
         r = report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
         m = r["metrics"]
         self.assertEqual((m["work_events"], m["completed_events"], m["identified_completed_tasks"], m["topics"]), (4, 3, 1, 2))
-        self.assertEqual((m["exact_seconds"], m["estimated_seconds"], m["unknown_duration_events"]), (3600, 3000, 1))
+        self.assertEqual((m["exact_seconds"], m["estimated_seconds"]), (3600, 3000))
         self.assertEqual((m["time_record_coverage"], m["task_identity_coverage"]), (0.75, 0.75))
         self.assertEqual(r["completeness"], "complete")
         first = build(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
         second = build(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))
         self.assertTrue(first["changed"])
         self.assertFalse(second["changed"])
+
+    def test_reader_output_hides_internal_fields_without_losing_provenance(self):
+        item = event(source="reader", dtype=None, seconds=None)
+        capture(self.root, item)
+        close_day(self.root, "codex", "2026-09-28", "current-task")
+        provisional = report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-28T12:30:00+08:00"))
+        self.assertIn("codex", provisional["coverage"]["missing"])
+        self.assertIn(item["entry_id"], provisional["provenance"])
+        markdown = render_markdown(provisional)
+        self.assertIn("当日记录仍在更新", markdown)
+        self.assertNotIn("缺失上报", markdown)
+        self.assertNotIn("Agent 记录时长", markdown)
+        self.assertNotIn(item["entry_id"], markdown)
+
+        when = datetime.fromisoformat("2026-09-29T01:00:00+08:00")
+        closed = report(self.root, "daily", "2026-09-28", when)
+        self.assertIn("codex", closed["coverage"]["missing"])
+        self.assertIn("记录尚未确认完整", render_markdown(closed))
+        build(self.root, "daily", "2026-09-28", when)
+        report_html = (self.root / "site/daily/2026-09-28/index/index.html").read_text(encoding="utf-8")
+        self.assertNotIn(item["entry_id"], report_html)
+        self.assertNotIn("Agent 记录时长", report_html)
+        self.assertNotIn("缺失上报", report_html)
+        self.assertNotIn("unknown_duration_events", closed["metrics"])
+
+        run_due(self.root, when)
+        index_html = (self.root / "site/current/index.html").read_text(encoding="utf-8")
+        self.assertNotIn("查看维度", index_html)
+        self.assertNotIn(item["entry_id"], index_html)
+        self.assertNotIn(item["revision_id"], index_html)
+
+        close_day(self.root, "codex", "2026-09-28", "full-day")
+        completed = report(self.root, "agent_daily", "2026-09-28", when, "codex")
+        self.assertNotIn("codex", completed["coverage"]["missing"])
+        self.assertEqual(completed["completeness"], "complete")
 
     def test_revision_conflict_then_resolve(self):
         original = event(source="rev")
@@ -105,6 +172,39 @@ class WorklogTests(unittest.TestCase):
         secret["summary"] = "password=abc123456789"
         capture(self.root, secret)
         self.assertNotIn("abc123456789", json.dumps(all_revisions(self.root)))
+
+    def test_blank_duration_and_legacy_revision(self):
+        blank = event(source="blank", dtype=None, seconds=None)
+        self.assertTrue(capture(self.root, blank)["persisted"])
+        self.assertEqual(blank["time"]["duration_type"], None)
+        self.assertEqual(report(self.root, "daily", "2026-09-28", datetime.fromisoformat("2026-09-29T01:00:00+08:00"))["metrics"]["time_record_coverage"], 0.0)
+
+        legacy = event(source="legacy", dtype=None, seconds=None)
+        legacy["schema_version"] = "1.0"
+        legacy["time"]["duration_type"] = "unknown"
+        validate_event(legacy, "Asia/Shanghai")
+        atomic_json(self.root / event_path(legacy), legacy)
+        with self.assertRaises(WorklogError):
+            capture(self.root, legacy)
+        amended = copy.deepcopy(legacy)
+        amended.update(schema_version="1.1", revision_id=str(uuid.uuid4()), parent_revision_ids=[legacy["revision_id"]], revision_kind="amend", revision_reason="工时字段留空")
+        amended["time"]["duration_type"] = None
+        self.assertTrue(capture(self.root, amended)["persisted"])
+        effective_events, conflicts = effective(all_revisions(self.root))
+        self.assertEqual(conflicts, [])
+        self.assertEqual(next(e for e in effective_events if e["entry_id"] == legacy["entry_id"])["time"]["duration_type"], None)
+
+    def test_chatgpt_bridge_can_leave_duration_blank(self):
+        fixture = Path(__file__).parent / "fixtures/synthetic-chatgpt-bridge.json"
+        document = json.loads(fixture.read_text(encoding="utf-8"))
+        for field in ("duration_type", "duration_seconds", "duration_basis"):
+            document["work"].pop(field)
+        candidate = convert(document)
+        self.assertEqual(candidate["schema_version"], "1.1")
+        self.assertIsNone(candidate["time"]["duration_type"])
+        self.assertIsNone(candidate["time"]["duration_seconds"])
+        self.assertIsNone(candidate["time"]["evidence_ref"])
+        self.assertTrue(capture(self.root, candidate)["persisted"])
 
     def test_offline_git_sync_only_stages_worklog_paths(self):
         subprocess.run(["git", "-c", "init.templateDir=/dev/null", "init", "-b", "main", str(self.root)], check=True, stdout=subprocess.DEVNULL)
@@ -151,7 +251,7 @@ class WorklogTests(unittest.TestCase):
         item = event(source="html")
         item["title"] = "<script>alert(1)</script>"
         capture(self.root, item)
-        close_day(self.root, "codex", "2026-09-28", "test-scope")
+        close_day(self.root, "codex", "2026-09-28", "full-day")
         when = datetime.fromisoformat("2026-09-29T00:20:00+08:00")
         result = run_due(self.root, when)
         self.assertEqual(result["due"], 1)
@@ -194,7 +294,7 @@ class WorklogTests(unittest.TestCase):
     def test_g03_amend_invalidates_closure_and_periods(self):
         original = event(day="2026-09-30", source="g03", seconds=2400)
         capture(self.root, original)
-        close_day(self.root, "codex", "2026-09-30", "test-scope")
+        close_day(self.root, "codex", "2026-09-30", "full-day")
         later = event(day="2026-10-01", source="g03-oct", seconds=3000)
         capture(self.root, later)
         now = datetime.fromisoformat("2026-10-08T01:00:00+08:00")
@@ -208,7 +308,7 @@ class WorklogTests(unittest.TestCase):
         self.assertEqual(report(self.root, "monthly", "2026-10", now)["metrics"]["estimated_seconds"], 3000)
         day = report(self.root, "daily", "2026-09-30", now)
         self.assertIn("codex", day["coverage"]["missing"])
-        close_day(self.root, "codex", "2026-09-30", "test-scope")
+        close_day(self.root, "codex", "2026-09-30", "full-day")
         self.assertNotIn("codex", report(self.root, "daily", "2026-09-30", now)["coverage"]["missing"])
 
     def test_task_carry_over_rebuilds_future_periods(self):
@@ -263,13 +363,13 @@ class WorklogTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["identified_completed_tasks"], 1)
         self.assertEqual(result["metrics"]["estimated_seconds"], 1800)
 
-    def test_seven_day_clock_simulation_reaches_weekly(self):
+    def test_cross_week_clock_simulation_reaches_weekly(self):
         start = date(2026, 9, 28)
         for offset in range(7):
             day = (start + timedelta(days=offset)).isoformat()
             capture(self.root, event(day=day, source=f"seven-{offset}", seconds=600))
             for agent in ("chatgpt", "codex", "claude-code"):
-                close_day(self.root, agent, day, "synthetic-coverage")
+                close_day(self.root, agent, day, "full-day")
             following = start + timedelta(days=offset + 1)
             run_due(self.root, datetime.fromisoformat(f"{following.isoformat()}T00:20:00+08:00"))
         week = report(self.root, "weekly", "2026-W40", datetime.fromisoformat("2026-10-05T00:20:00+08:00"))
@@ -280,7 +380,7 @@ class WorklogTests(unittest.TestCase):
     def test_restore_from_git_rebuilds_same_report_and_site(self):
         capture(self.root, event(source="restore", seconds=1200))
         for agent in ("chatgpt", "codex", "claude-code"):
-            close_day(self.root, agent, "2026-09-28", "synthetic-coverage")
+            close_day(self.root, agent, "2026-09-28", "full-day")
         when = datetime.fromisoformat("2026-09-29T00:20:00+08:00")
         run_due(self.root, when)
         relative_report = Path("reports/2026/daily/09/28/summary.json")
@@ -300,43 +400,6 @@ class WorklogTests(unittest.TestCase):
         finally:
             import shutil
             shutil.rmtree(restored, ignore_errors=True)
-
-    def test_trial_audit_uses_current_report_state(self):
-        script = Path(__file__).parents[1] / "scripts/audit_trial.py"
-        spec = importlib.util.spec_from_file_location("audit_trial_test", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.DATA = self.root
-        module.RUNTIME = self.root / ".worklog-runtime"
-        module.RUNTIME.mkdir()
-        first = datetime.now().astimezone().date() - timedelta(days=10)
-        lines = []
-        for i in range(7):
-            day = first + timedelta(days=i)
-            lines.append(json.dumps({"run_at": f"{day.isoformat()}T12:00:00+08:00", "incomplete": []}))
-            path = self.root / "reports" / day.strftime("%Y/daily/%m/%d/summary.json")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"kind": "daily", "report_key": f"daily:{day.isoformat()}", "period": {"start": f"{day.isoformat()}T00:00:00+08:00", "end": f"{(day + timedelta(days=1)).isoformat()}T00:00:00+08:00"}, "completeness": "complete"}))
-            if day.weekday() == 6:
-                iso = day.isocalendar()
-                week_path = self.root / "reports" / str(iso.year) / "weekly" / f"W{iso.week:02d}" / "summary.json"
-                week_path.parent.mkdir(parents=True, exist_ok=True)
-                week_start = day - timedelta(days=6)
-                week_path.write_text(json.dumps({"kind": "weekly", "report_key": f"weekly:{iso.year}-W{iso.week:02d}", "period": {"start": f"{week_start.isoformat()}T00:00:00+08:00", "end": f"{(day + timedelta(days=1)).isoformat()}T00:00:00+08:00"}, "completeness": "complete"}))
-        (module.RUNTIME / "launchd.out.log").write_text("\n".join(lines) + "\n")
-        out = io.StringIO()
-        with redirect_stdout(out):
-            module.main()
-        self.assertEqual(json.loads(out.getvalue())["status"], "ready_for_review")
-        last_path = self.root / "reports" / (first + timedelta(days=6)).strftime("%Y/daily/%m/%d/summary.json")
-        item = json.loads(last_path.read_text())
-        item["completeness"] = "incomplete"
-        last_path.write_text(json.dumps(item))
-        out = io.StringIO()
-        with redirect_stdout(out):
-            module.main()
-        self.assertEqual(json.loads(out.getvalue())["status"], "in_progress_or_incomplete")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -91,7 +91,7 @@ def _run_due_inner(root: Path, as_of: datetime, dry_run: bool, force: bool) -> d
                 item["days"] = [json.loads(path.read_text(encoding="utf-8"))["work_date"]]
             inputs[relative] = item
     skill_root = Path(__file__).resolve().parents[2]
-    for path in sorted((skill_root / "src/worklog").glob("*.py")) + sorted((skill_root / "templates").glob("*.html")):
+    for path in sorted((skill_root / "src/worklog").glob("*.py")) + sorted((skill_root / "templates").glob("*.html")) + sorted((skill_root / "templates").glob("*.css")):
         inputs[f"skill/{path.relative_to(skill_root)}"] = {"hash": hashlib.sha256(path.read_bytes()).hexdigest(), "days": []}
     changed_paths = {path for path in set(inputs) | set(prior["inputs"]) if inputs.get(path) != prior["inputs"].get(path)}
     policy_changed = any(path.startswith(("policy/", "overrides/", "skill/")) for path in changed_paths)

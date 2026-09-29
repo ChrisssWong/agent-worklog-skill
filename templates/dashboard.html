@@ -1,7 +1,68 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ title }}</title><style>
-body{font-family:system-ui,-apple-system,"PingFang SC",sans-serif;max-width:1000px;margin:auto;padding:1.5rem;background:#f6f7f9;color:#1d3347}nav,section,header{background:white;border-radius:12px;padding:1.2rem;margin:1rem 0}a{color:#125b81}a:focus{outline:3px solid orange}li{margin:.5rem 0;overflow-wrap:anywhere}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.6rem}.cards div{background:#eaf2f5;padding:.8rem;border-radius:8px}small{color:#536879}code{overflow-wrap:anywhere}@media(max-width:600px){body{padding:.5rem}nav,section,header{padding:.9rem}}
-</style></head><body><nav><a href="{{ root_prefix }}index.html">首页</a> · <a href="{{ root_prefix }}growth/index.html">成长记录</a></nav><header><h1>{{ title }}</h1><small>构建依据截至 {{ as_of }}；冲突事件 {{ conflicts|length }} 条。页面仅展示已记录的事实，空白不代表没有工作。</small></header>
-<section><h2>概览</h2><div class="cards"><div>事件<br><strong>{{ records|length }}</strong></div><div>活动日<br><strong>{{ active_days }}</strong></div><div>项目<br><strong>{{ projects|length }}</strong></div><div>Agent<br><strong>{{ agents|length }}</strong></div></div><p>记录日期：{{ date_range[0] or '无数据' }} 至 {{ date_range[1] or '无数据' }}</p></section>
-<section><h2>查看维度</h2><p>年份：{% for y in years %}<a href="{{ root_prefix }}years/{{ y }}/index.html">{{ y }}</a> {% endfor %}</p><p>项目：{% for x in projects %}<a href="{{ root_prefix }}projects/{{ x }}/index.html">{{ x }}</a> {% endfor %}</p><p>技术：{% for label,key in technology_links %}<a href="{{ root_prefix }}technologies/{{ key }}/index.html">{{ label }}</a> {% endfor %}</p><p>Agent：{% for x in agents %}<a href="{{ root_prefix }}agents/{{ x }}/index.html">{{ x }}</a> {% endfor %}</p></section>
-{% if is_growth %}<section><h2>技术主题变化</h2><p>首次和最近出现只反映工作记录，不代表熟练程度。</p><div style="overflow-x:auto"><table><thead><tr><th>主题</th><th>首次</th><th>最近</th><th>活动日</th><th>事件</th><th>项目</th></tr></thead><tbody>{% for row in growth_rows %}<tr><td>{{ row.technology }}</td><td>{{ row.first }}</td><td>{{ row.last }}</td><td>{{ row.active_days }}</td><td>{{ row.events }}</td><td>{{ row.projects }}</td></tr>{% endfor %}</tbody></table></div></section>{% endif %}
-<section><h2>有来源的工作</h2>{% if records %}<ol>{% for e in records %}<li><strong>{{ e.work_date }} · {{ e.title }}</strong>（{{ e.agent_id }} / {{ e.project_id }}）<br>{{ e.summary }}<br><small>事件 {{ e.entry_id }} · 修订 {{ e.revision_id }}</small></li>{% endfor %}</ol>{% else %}<p>暂无记录。</p>{% endif %}</section></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title }}</title>
+  <style>{% include "site.css" %}</style>
+</head>
+<body data-style="{{ style }}">
+  <div class="shell">
+    <header class="masthead">
+      <a class="brand" href="{{ root_prefix }}index.html">工作日志</a>
+      <nav aria-label="页面导航"><ul class="nav">
+        <li><a href="{{ root_prefix }}index.html"{% if page_kind == 'overview' %} aria-current="page"{% endif %}>总览</a></li>
+        <li><a href="{{ root_prefix }}growth/index.html"{% if page_kind == 'growth' %} aria-current="page"{% endif %}>成长记录</a></li>
+      </ul></nav>
+      <small>记录更新至 {{ as_of[:10] }}</small>
+    </header>
+    <div class="layout">
+      <aside class="rail" aria-label="记录范围">
+        <div class="kicker">WORKLOG / {{ date_range[1][:4] if date_range[1] else '—' }}</div>
+        <strong>{{ date_range[1][:7] if date_range[1] else '暂无记录' }}</strong>
+        <div>{{ date_range[0] or '—' }}<br>— {{ date_range[1] or '—' }}</div>
+        <div class="rail-rule"></div>
+        <div>{{ records|length }} 条工作记录</div>
+      </aside>
+      <main class="content">
+        <div class="page-head">
+          <div class="kicker">{% if is_growth %}成长记录{% else %}工作日志{% endif %} / {{ date_range[1] or '暂无记录' }}</div>
+          <h1>{{ title }}</h1>
+          <p class="intro">记录日期：{{ date_range[0] or '无数据' }} 至 {{ date_range[1] or '无数据' }}</p>
+          {% if conflicts %}<div class="meta-line"><span class="status">部分记录存在冲突，尚未纳入展示</span></div>{% endif %}
+        </div>
+        <section class="section" aria-labelledby="overview-heading">
+          <div class="section-head"><h2 id="overview-heading">概览</h2><small>截至目前</small></div>
+          <div class="metrics" aria-label="总览指标">
+            <div class="metric"><strong>{{ records|length }}</strong><span>工作记录</span></div>
+            <div class="metric"><strong>{{ active_days }}</strong><span>活动日</span></div>
+            <div class="metric"><strong>{{ projects|length }}</strong><span>项目</span></div>
+            <div class="metric"><strong>{{ agents|length }}</strong><span>Agent</span></div>
+          </div>
+        </section>
+        {% if is_growth %}
+        <section class="section" aria-labelledby="growth-heading">
+          <div class="section-head"><h2 id="growth-heading">技术主题变化</h2><small>{{ growth_rows|length }} 个主题</small></div>
+          {% if growth_rows %}<div class="table-wrap"><table><thead><tr><th>主题</th><th>首次</th><th>最近</th><th>活动日</th><th>工作记录</th><th>项目</th></tr></thead><tbody>
+          {% for row in growth_rows %}<tr><td>{{ row.technology }}</td><td>{{ row.first }}</td><td>{{ row.last }}</td><td>{{ row.active_days }}</td><td>{{ row.events }}</td><td>{{ row.projects }}</td></tr>{% endfor %}
+          </tbody></table></div>{% else %}<p class="intro">暂无记录</p>{% endif %}
+        </section>
+        {% elif years or projects or technology_links or agents %}
+        <section class="section" aria-labelledby="dimensions-heading">
+          <div class="section-head"><h2 id="dimensions-heading">浏览维度</h2></div>
+          {% if years %}<dl class="dim-list"><dt>年份</dt><dd>{% for y in years %}<a href="{{ root_prefix }}years/{{ y }}/index.html">{{ y }}</a>{% endfor %}</dd></dl>{% endif %}
+          {% if projects %}<dl class="dim-list"><dt>项目</dt><dd>{% for x in projects %}<a href="{{ root_prefix }}projects/{{ x }}/index.html">{{ x }}</a>{% endfor %}</dd></dl>{% endif %}
+          {% if technology_links %}<dl class="dim-list"><dt>技术</dt><dd>{% for label,key in technology_links %}<a href="{{ root_prefix }}technologies/{{ key }}/index.html">{{ label }}</a>{% endfor %}</dd></dl>{% endif %}
+          {% if agents %}<dl class="dim-list"><dt>Agent</dt><dd>{% for x in agents %}<a href="{{ root_prefix }}agents/{{ x }}/index.html">{{ x }}</a>{% endfor %}</dd></dl>{% endif %}
+        </section>
+        {% endif %}
+        <section class="section" id="records" aria-labelledby="records-heading">
+          <div class="section-head"><h2 id="records-heading">工作记录</h2><small>共 {{ records|length }} 条</small></div>
+          {% for e in records %}<article class="record"><div class="record-date">{{ e.work_date }}</div><div><h3>{{ e.title }}</h3><p>{{ e.summary }}</p><div class="record-tags"><span>{{ e.agent_id }}</span><span>{{ e.project_id }}</span></div></div></article>{% else %}<p class="intro">暂无记录</p>{% endfor %}
+        </section>
+      </main>
+    </div>
+    <footer class="foot"><span>工作日志</span><span>{{ date_range[0] or '—' }} 至 {{ date_range[1] or '—' }}</span></footer>
+  </div>
+</body>
+</html>
